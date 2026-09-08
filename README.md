@@ -1,21 +1,26 @@
 # Bug-Hunt-Agent
 
-Local-first, policy-controlled bug-bounty research platform MVP scaffold.
+Local-first, policy-controlled bug-bounty research platform MVP rebuilt from `Readme2.md` requirements.
 
-## Safety-first defaults
+## What this MVP now provides
 
-- Local-only mode enabled by default
+- Trusted program discovery seed flow (`/programs/discover`)
+- Program inventory and explainable opportunity scoring (`/programs`, `/programs/opportunities`)
+- Campaign creation with strict target host binding and mode selection (`passive` / `safe_active`)
+- Mandatory policy enforcement before every queued action
+- Emergency stop and campaign pause controls
+- Policy decision logging, audit logging, and job lifecycle tracking
+- Finding capture and report draft generation workflows
+- First-run and service health checks
+- Three-container Docker architecture (`app`, `worker`, `postgres`)
+
+## Safety defaults
+
+- Local-only operation
 - Passive research mode by default
-- Human approval required for impactful actions
-- Strict in-scope target enforcement
+- Human approval mode enabled
 - No destructive testing
 - No automatic report submission
-
-## Minimal Docker architecture (3 containers)
-
-- `app`: FastAPI API + local dashboard + orchestration APIs
-- `worker`: background job runner (same image as app)
-- `postgres`: persistent state
 
 ## Quick start
 
@@ -31,7 +36,7 @@ Local-first, policy-controlled bug-bounty research platform MVP scaffold.
    ```bash
    docker compose up -d
    ```
-4. Open dashboard:
+4. Open dashboard/API:
    - `http://localhost:8000`
 5. Stream logs:
    ```bash
@@ -48,23 +53,14 @@ Local-first, policy-controlled bug-bounty research platform MVP scaffold.
 
 ## Data reset (destructive)
 
-Use the explicit reset command with confirmation:
-
 ```bash
 CONFIRM_DATA_RESET=YES docker compose run --rm app reset-data
 ```
 
-## Local directories
+## Local data directories
 
 - `./data/postgres`
 - `./data/evidence`
 - `./data/reports`
 - `./data/logs`
 - `./data/backups`
-
-## Notes
-
-- PostgreSQL is not exposed to host by default.
-- Worker runs as a non-root user with dropped Linux capabilities.
-- Browser automation uses isolated Playwright Chromium in-container.
-- Tool execution must pass policy checks before running.

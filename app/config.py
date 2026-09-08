@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     model_provider: str = "mock"
     model_api_key: str = ""
 
+    tool_playwright_enabled: bool = True
+    tool_http_probe_enabled: bool = True
+
+    log_level: str = "INFO"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
