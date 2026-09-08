@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+bughunt.db
+/tmp/
+data/postgres/
+data/evidence/
+data/reports/
+data/logs/
+data/backups/
