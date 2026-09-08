@@ -84,3 +84,39 @@ def test_findings_and_report_draft_flow() -> None:
         reports = client.get("/reports")
         assert reports.status_code == 200
         assert len(reports.json()) >= 1
+
+
+def test_autonomous_run_queues_passive_jobs() -> None:
+    with TestClient(app) as client:
+        campaign_id = _create_campaign(client, testing_mode="passive")
+        run = client.post(
+            f"/campaigns/{campaign_id}/autonomous-run",
+            json={"max_jobs": 5},
+        )
+        assert run.status_code == 200
+        payload = run.json()
+        assert payload["status"] == "queued"
+        assert len(payload["queued_jobs"]) == 5
+        assert all(item["action"] in {"surface_map", "passive_recon", "http_probe"} for item in payload["queued_jobs"])
+
+
+def test_autonomous_run_rejects_mismatched_base_url() -> None:
+    with TestClient(app) as client:
+        campaign_id = _create_campaign(client, testing_mode="safe_active")
+        run = client.post(
+            f"/campaigns/{campaign_id}/autonomous-run",
+            json={"base_url": "https://example.com"},
+        )
+        assert run.status_code == 400
+
+
+def test_autonomous_run_includes_safe_active_checks() -> None:
+    with TestClient(app) as client:
+        campaign_id = _create_campaign(client, testing_mode="safe_active")
+        run = client.post(
+            f"/campaigns/{campaign_id}/autonomous-run",
+            json={"max_jobs": 8},
+        )
+        assert run.status_code == 200
+        actions = {item["action"] for item in run.json()["queued_jobs"]}
+        assert {"auth_check", "idor_check", "rate_limit_check"}.issubset(actions)

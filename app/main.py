@@ -1,4 +1,5 @@
 from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -59,6 +60,11 @@ class CampaignCreateRequest(BaseModel):
 class JobCreateRequest(BaseModel):
     action: str
     target: str
+
+
+class AutonomousRunRequest(BaseModel):
+    base_url: str | None = None
+    max_jobs: int = Field(default=5, ge=1, le=20)
 
 
 class FindingCreateRequest(BaseModel):
@@ -302,6 +308,118 @@ def create_job(campaign_id: int, payload: JobCreateRequest) -> dict[str, int | s
         )
         session.commit()
     return {"job_id": job_id, "status": "queued"}
+
+
+def _campaign_base_url(target_host: str, base_url: str | None) -> str:
+    if base_url is None:
+        return f"https://{target_host}"
+
+    candidate = base_url.strip().rstrip("/")
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="base_url must be a valid http(s) URL")
+    if parsed.hostname != target_host:
+        raise HTTPException(status_code=400, detail="base_url hostname must match campaign target_host")
+    return candidate
+
+
+def _build_autonomous_jobs(base_url: str, testing_mode: str) -> list[tuple[str, str]]:
+    jobs = [
+        ("surface_map", base_url),
+        ("passive_recon", base_url),
+        ("http_probe", base_url),
+        ("http_probe", f"{base_url}/robots.txt"),
+        ("http_probe", f"{base_url}/.well-known/security.txt"),
+    ]
+    if testing_mode == "safe_active":
+        jobs.extend(
+            [
+                ("auth_check", f"{base_url}/login"),
+                ("idor_check", f"{base_url}/api/v1/resource/1"),
+                ("rate_limit_check", f"{base_url}/api/v1/auth/login"),
+            ]
+        )
+    return jobs
+
+
+@app.post("/campaigns/{campaign_id}/autonomous-run")
+def autonomous_run(campaign_id: int, payload: AutonomousRunRequest) -> dict[str, object]:
+    with SessionLocal() as session:
+        campaign = session.get(Campaign, campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="campaign not found")
+        if campaign.paused:
+            raise HTTPException(status_code=423, detail="campaign is paused")
+
+        stop = session.execute(select(EmergencyStop).limit(1)).scalar_one()
+        base_url = _campaign_base_url(campaign.target_host, payload.base_url)
+
+        queued: list[dict[str, int | str]] = []
+        blocked: list[dict[str, str]] = []
+        for action, target in _build_autonomous_jobs(base_url, campaign.testing_mode):
+            if len(queued) >= payload.max_jobs:
+                break
+            decision = PolicyEngine().evaluate(
+                PolicyRequest(
+                    campaign_id=campaign.id,
+                    action=action,
+                    target=target,
+                    in_scope_hosts={campaign.target_host},
+                    excluded_hosts=set(),
+                    research_mode=campaign.testing_mode,
+                    emergency_stop_active=stop.active,
+                    total_requests_so_far=campaign.requests_consumed,
+                    max_total_requests=campaign.max_total_requests,
+                )
+            )
+            session.add(
+                PolicyDecision(
+                    campaign_id=campaign.id,
+                    action=action,
+                    target=target,
+                    allowed=decision.allowed,
+                    reason=decision.reason,
+                )
+            )
+            if not decision.allowed:
+                blocked.append({"action": action, "target": target, "reason": decision.reason})
+                session.add(
+                    AuditLog(
+                        event_type="policy_block",
+                        actor="policy",
+                        campaign_id=campaign.id,
+                        details=decision.reason,
+                    )
+                )
+                continue
+
+            job_id = enqueue_job(campaign_id=campaign.id, action=action, target=target)
+            queued.append({"job_id": job_id, "action": action, "target": target})
+            session.add(
+                AuditLog(
+                    event_type="job_enqueued",
+                    actor="autonomous",
+                    campaign_id=campaign.id,
+                    details=f"job_id={job_id}, action={action}",
+                )
+            )
+
+        session.add(
+            AuditLog(
+                event_type="autonomous_run_requested",
+                actor="user",
+                campaign_id=campaign.id,
+                details=f"queued={len(queued)}, blocked={len(blocked)}",
+            )
+        )
+        session.commit()
+        return {
+            "campaign_id": campaign.id,
+            "base_url": base_url,
+            "queued_jobs": queued,
+            "blocked_jobs": blocked,
+            "status": "queued" if queued else "no_jobs_queued",
+        }
 
 
 @app.get("/campaigns/{campaign_id}/jobs")
